@@ -1,153 +1,228 @@
-"use client"
+'use client'
 
-import { useState } from "react"
-import { Mail, Lock, ArrowRight, Loader2, Sparkles, ShieldCheck } from "lucide-react"
-import { supabase } from "@/lib/supabase" // Cliente oficial de Supabase
+import React, { useState } from 'react'
+import { supabase } from '@/lib/supabase'
+import { getMyProfile } from '@/services/api'
+import { Mail, Lock, User, Phone, ArrowRight, Loader2, AlertCircle } from 'lucide-react'
 
 interface WelcomeAuthProps {
-  onSuccess: (email: string) => void
+  onSuccess?: (profile?: any) => void
 }
 
 export function WelcomeAuth({ onSuccess }: WelcomeAuthProps) {
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
+  const [isRegisterMode, setIsRegisterMode] = useState(false)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [fullName, setFullName] = useState('')
+  const [phone, setPhone] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-  const handleAuth = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!email || !password) return
-
+    setErrorMsg(null)
     setLoading(true)
-    setError(null)
 
     try {
-      let accessToken = null
+      let sessionToken: string | undefined
 
-      // Intentamos conectar con Supabase si está disponible
-      try {
-        let { data, error: authError } = await supabase.auth.signInWithPassword({
-          email,
+      if (isRegisterMode) {
+        if (!fullName.trim() || !phone.trim()) {
+          throw new Error('Por favor completa tu nombre y número de teléfono.')
+        }
+
+        // Registro directo con SDK oficial y metadatos para el trigger de Postgres
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: {
+            data: {
+              full_name: fullName.trim(),
+              phone: phone.trim(),
+            },
+          },
+        })
+
+        if (error) throw error
+        sessionToken = data.session?.access_token
+      } else {
+        // Inicio de sesión directo con Supabase Auth
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
           password,
         })
 
-        if (authError) {
-          const signUpRes = await supabase.auth.signUp({
-            email,
-            password,
-          })
-          data = signUpRes.data
-          authError = signUpRes.error
-        }
-
-        if (!authError && data?.session?.access_token) {
-          accessToken = data.session.access_token
-        }
-      } catch (supabaseErr) {
-        console.warn("Supabase no configurado, usando respaldo local de desarrollo.")
+        if (error) throw error
+        sessionToken = data.session?.access_token
       }
 
-      // RESPALDO HÍBRIDO: Si no hay token de Supabase, generamos uno local válido para desarrollo
-      if (!accessToken) {
-        accessToken = `dev_jwt_token_${btoa(email)}_${Date.now()}`
+      if (!sessionToken) {
+        throw new Error('No se recibió el token de sesión desde Supabase.')
       }
 
-      // Guardar el token y el correo en el navegador
-      localStorage.setItem("sb-access-token", accessToken)
-      localStorage.setItem("user-email", email)
+      // Guardamos el JWT como respaldo para services/api.js
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('sb-access-token', sessionToken)
+        localStorage.setItem('user-email', email.trim())
+      }
 
-      // Notificar éxito al componente padre
-      onSuccess(email)
+      // Consultamos GET /profiles/me en FastAPI (ya creado por el trigger on_auth_user_created)
+      let profile = null
+      try {
+        profile = await getMyProfile()
+      } catch (profileErr) {
+        console.warn('Perfil consultado con retraso inicial, continuando sesión:', profileErr)
+      }
 
+      if (onSuccess) {
+        onSuccess(profile)
+      } else if (typeof window !== 'undefined') {
+        window.location.reload()
+      }
     } catch (err: any) {
-      console.error("Error en autenticación:", err)
-      setError(err?.message || "Ocurrió un error al procesar el acceso.")
+      // Usamos console.warn para evitar el overlay intrusivo de desarrollo en Next.js
+      console.warn('Error de autenticación controlado:', err?.message || err)
+      setErrorMsg(err?.message || 'Ocurrió un error al autenticar. Verifica tus datos.')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-neutral-950 via-neutral-900 to-black p-4 text-white">
-      <div className="relative w-full max-w-md rounded-3xl bg-neutral-900/90 border border-neutral-800 p-8 shadow-2xl backdrop-blur-xl space-y-8">
-        
-        <div className="flex justify-center">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-neutral-800 text-neutral-300 border border-neutral-700">
-            <Sparkles className="w-3.5 h-3.5 text-rose-400" /> TurisVe • Barlovento & Más
-          </span>
-        </div>
-
-        <div className="text-center space-y-3">
-          <h1 className="text-3xl font-extrabold tracking-tight">Accede a TurisVe</h1>
-          <p className="text-sm text-neutral-400 leading-relaxed">
-            Ingresa tu correo y contraseña. Si no tienes una cuenta, <span className="text-white font-semibold">se creará automáticamente</span> al instante.
+    <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-white px-4">
+      <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-2xl p-8 shadow-2xl">
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-rose-600 text-white font-bold text-xl mb-4">
+            TV
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {isRegisterMode ? 'Crea tu cuenta en TurisVe' : 'Accede a TurisVe'}
+          </h1>
+          <p className="text-sm text-neutral-400 mt-1">
+            {isRegisterMode
+              ? 'Regístrate para descubrir posadas y destinos únicos'
+              : 'Ingresa tus credenciales para continuar'}
           </p>
         </div>
 
-        <form onSubmit={handleAuth} className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="block text-xs font-semibold text-neutral-300 uppercase tracking-wider">
-              Correo Electrónico
+        {errorMsg && (
+          <div className="mb-5 p-3 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-2.5 text-sm text-red-300">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-400" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {isRegisterMode && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-neutral-300 mb-1.5">
+                  Nombre completo
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-neutral-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Ej. Mack González"
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-neutral-300 mb-1.5">
+                  Teléfono (WhatsApp)
+                </label>
+                <div className="relative">
+                  <Phone className="w-4 h-4 text-neutral-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="tel"
+                    required
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+584121234567"
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          <div>
+            <label className="block text-xs font-medium text-neutral-300 mb-1.5">
+              Correo electrónico
             </label>
             <div className="relative">
-              <Mail className="w-4 h-4 absolute left-3.5 top-3.5 text-neutral-500" />
+              <Mail className="w-4 h-4 text-neutral-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 bg-neutral-950 border border-neutral-800 rounded-xl text-sm text-white placeholder-neutral-600 focus:outline-none focus:border-neutral-500 transition-colors"
-                placeholder="tu.correo@gmail.com"
+                placeholder="tu@correo.com"
+                className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-rose-500"
               />
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <label className="block text-xs font-semibold text-neutral-300 uppercase tracking-wider">
+          <div>
+            <label className="block text-xs font-medium text-neutral-300 mb-1.5">
               Contraseña
             </label>
             <div className="relative">
-              <Lock className="w-4 h-4 absolute left-3.5 top-3.5 text-neutral-500" />
+              <Lock className="w-4 h-4 text-neutral-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="password"
                 required
                 minLength={6}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 bg-neutral-950 border border-neutral-800 rounded-xl text-sm text-white placeholder-neutral-600 focus:outline-none focus:border-neutral-500 transition-colors"
                 placeholder="••••••••"
+                className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-rose-500"
               />
             </div>
           </div>
 
-          {error && (
-            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400 font-medium">
-              {error}
-            </div>
-          )}
-
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3.5 bg-white hover:bg-neutral-200 text-neutral-950 text-xs font-bold uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg active:scale-[0.99] disabled:opacity-50 mt-2"
+            className="w-full mt-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-60 text-white font-medium py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
           >
             {loading ? (
-              <Loader2 className="w-4 h-4 animate-spin text-neutral-950" />
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Procesando...</span>
+              </>
             ) : (
               <>
-                <span>Continuar a TurisVe</span>
+                <span>{isRegisterMode ? 'Registrarme y entrar' : 'Iniciar sesión'}</span>
                 <ArrowRight className="w-4 h-4" />
               </>
             )}
           </button>
         </form>
 
-        <div className="flex items-center justify-center gap-2 text-[11px] text-neutral-500 pt-2 border-t border-neutral-800/60">
-          <ShieldCheck className="w-4 h-4 text-emerald-500" />
-          <span>Acceso seguro unificado</span>
+        <div className="mt-6 pt-5 border-t border-neutral-800 text-center">
+          <p className="text-xs text-neutral-400">
+            {isRegisterMode ? '¿Ya tienes una cuenta?' : '¿Aún no tienes cuenta en TurisVe?'}{' '}
+            <button
+              type="button"
+              onClick={() => {
+                setIsRegisterMode(!isRegisterMode)
+                setErrorMsg(null)
+              }}
+              className="text-rose-400 hover:text-rose-300 font-semibold ml-1 cursor-pointer"
+            >
+              {isRegisterMode ? 'Inicia sesión' : 'Regístrate aquí'}
+            </button>
+          </p>
         </div>
-
       </div>
     </div>
   )
 }
+
+export default WelcomeAuth
